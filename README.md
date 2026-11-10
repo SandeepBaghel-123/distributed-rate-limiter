@@ -9,10 +9,6 @@ It supports multiple core algorithms:
 ---
 
 ## 📌 Architecture Overview
-
-
-```
-
 ```
                     +----------------------+
                     |   HTTP Request /     |
@@ -32,8 +28,6 @@ It supports multiple core algorithms:
                     |      Redis Data      |
                     |     Store (State)    |
                     +----------------------+
-
-```
 
 ```
 
@@ -149,9 +143,6 @@ I tested the Leaky Bucket algorithm under identical load to verify constant-rate
   99% in 0.0165 secs  <-- p99: ~16.5 ms
 
 ```
-
----
-
 ## 📈 Key Takeaways & Performance Observations
 
 1. **Deterministic Concurrency:** The atomic Redis Lua script prevents race conditions under high concurrent loads (100 parallel workers), ensuring zero unauthorized requests leak through.
@@ -174,9 +165,5 @@ hey -z 30s -c 100 http://localhost:8080/v1/token-resource
 
 # Leaky Bucket Benchmark
 hey -z 30s -c 100 http://localhost:8080/v1/leaky-resource
-
-```
-
-```
 
 ```
