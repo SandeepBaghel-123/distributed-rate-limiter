@@ -22,6 +22,7 @@ func main() {
 	// 2. Initialize Limiters for both Algorithms
 	tokenBucketLimiter := algorithms.NewTokenBucketLimiter(redisClient.UniversalClient)
 	leakyBucketLimiter := algorithms.NewLeakyBucketLimiter(redisClient.UniversalClient)
+	fixedWindowLimiter := algorithms.NewFixedWindowLimiter(redisClient.UniversalClient)
 
 	// 3. Setup Router
 	r := chi.NewRouter()
@@ -48,8 +49,18 @@ func main() {
 		})
 	})
 
-	// 6. Start Server
-	log.Println("Rate limiter server running on port 8080 with Token and Leaky Bucket algorithms...")
+	// 6. Route Group 3: Fixed Window Protected Endpoint (Traffic Shaping)
+	r.Group(func(r chi.Router) {
+		r.Use(custommw.FixedWindowRatetLimitMiddleware(fixedWindowLimiter))
+		r.Get("/v1/fixed-resource", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status": "success", "message": "Fixed Window request processed."}`))
+		})
+	})
+
+	// 7. Start Server
+	log.Println("Rate limiter server running on port 8080 with Token, Leaky Bucket, and Fixed Window algorithms...")
 	if err := http.ListenAndServe(":8080", r); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}

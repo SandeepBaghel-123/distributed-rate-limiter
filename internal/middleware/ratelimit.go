@@ -70,3 +70,11 @@ func LeakyBucketRatetLimitMiddleware(limiter *algorithms.LeakyBucketLimiter) fun
 		return limiter.Allow(ctx, key, 10.0, 2.0, 1)
 	})
 }
+
+// FixedWindowRatetLimitMiddleware wraps the Fixed Window limiter.
+func FixedWindowRatetLimitMiddleware(limiter *algorithms.FixedWindowLimiter) func(http.Handler) http.Handler {
+	return baseRateLimitMiddleware("fw", "Rate limit exceeded. Fixed Window limit reached.", func(ctx context.Context, key string) (*algorithms.RateLimiterResult, error) {
+		// Window size: 60 seconds, Limit: 5 requests, Requested: 1
+		return limiter.Allow(ctx, key, 60.0, 5.0, 1)
+	})
+}

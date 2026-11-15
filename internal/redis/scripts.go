@@ -79,3 +79,37 @@ else
 	return {0, capacity - water_level, retry_after}
 end
 `
+
+const FixedWindowScript = `
+local key = KEYS[1]
+local window_size = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local requested = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
+
+-- Determine current window bucket timestamp
+local current_window = math.floor(now / window_size)
+local window_key = key .. ":" .. current_window
+
+local current_count = tonumber(redis.call('GET', window_key) or "0")
+
+if current_count + requested > limit then
+	local window_end = (current_window + 1) * window_size
+	local retry_after_sec = window_end - now
+	if retry_after_sec < 1 then
+		retry_after_sec = 1
+	end
+	local remaining = limit - current_count
+	if remaining < 0 then remaining = 0 end
+	return {0, remaining, retry_after_sec}
+else
+	local new_count = redis.call('INCRBY', window_key, requested)
+	if current_count == 0 then
+		-- Expire key after twice the window size to clean up old windows safely
+		redis.call('EXPIRE', window_key, window_size * 2)
+	end
+	local remaining = limit - new_count
+	if remaining < 0 then remaining = 0 end
+	return {1, remaining, 0}
+end
+`
