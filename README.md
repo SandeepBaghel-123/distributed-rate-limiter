@@ -5,6 +5,7 @@ A high-performance, distributed rate-limiter engine implemented in **Go** utiliz
 It supports multiple core algorithms:
 - **Token Bucket Algorithm** (Supports bursty client traffic)
 - **Leaky Bucket Algorithm** (Enforces smooth, constant egress rate processing)
+- **Fixed Window Counter Algorithm** (Enforces discrete time-window quotas with Redis atomic counters)
 
 ---
 
@@ -76,6 +77,7 @@ The service will start listening on `http://localhost:8080`.
 | --- | --- | --- |
 | `GET /v1/token-resource` | **Token Bucket** | Accommodates traffic bursts up to max capacity; throttles when tokens deplete. |
 | `GET /v1/leaky-resource` | **Leaky Bucket** | Processes requests at a constant leak rate; drops excess requests instantly when full. |
+| `GET /v1/fixed-resource` | **Fixed Window Counter** |	Enforces a maximum request limit per discrete time window (e.g., 5 requests/60s). |
 
 ---
 
@@ -99,8 +101,8 @@ I tested the Token Bucket algorithm under burst conditions to verify capacity-ba
 * **Total Requests Processed:** ~337,700
 * **Throughput:** **11,254.06 Requests/Sec**
 * **Status Code Distribution:**
-* `200 OK` (Allowed Bursts): **34,137**
-* `429 Too Many Requests` (Throttled): **303,563**
+  - `200 OK` (Allowed Bursts): **34,137**
+  - `429 Too Many Requests` (Throttled): **303,563**
 
 
 
@@ -126,8 +128,8 @@ I tested the Leaky Bucket algorithm under identical load to verify constant-rate
 * **Total Requests Processed:** ~343,400
 * **Throughput:** **11,445.16 Requests/Sec**
 * **Status Code Distribution:**
-* `200 OK` (Allowed at Leak Rate): **6,900**
-* `429 Too Many Requests` (Throttled/Overflow): **336,514**
+  - `200 OK` (Allowed at Leak Rate): **6,900**
+  - `429 Too Many Requests` (Throttled/Overflow): **336,514**
 
 
 
@@ -143,6 +145,32 @@ I tested the Leaky Bucket algorithm under identical load to verify constant-rate
   99% in 0.0165 secs  <-- p99: ~16.5 ms
 
 ```
+
+---
+
+### 3. Fixed Window Counter Algorithm (`/v1/fixed-resource`)
+
+I tested the Fixed Window Counter algorithm under spike traffic to verify discrete time-window quota enforcement and immediate limit interception.
+
+* **Total Requests Processed:** 20
+* **Throughput:** **468.89 Requests/Sec**
+* **Status Code Distribution:**
+  - `200 OK` (Allowed within Window): **5**
+  - `429 Too Many Requests` (Exceeded Quota): **15**
+ 
+
+#### Latency Percentiles (Fixed Window Counter)
+
+```text
+  10% in 0.0008 secs
+  25% in 0.0010 secs
+  50% in 0.0019 secs  <-- Median (p50): ~1.9 ms
+  75% in 0.0278 secs
+  90% in 0.0389 secs
+  95% in 0.0397 secs  <-- p95: ~39.7 ms
+```
+
+
 ## 📈 Key Takeaways & Performance Observations
 
 1. **Deterministic Concurrency:** The atomic Redis Lua script prevents race conditions under high concurrent loads (100 parallel workers), ensuring zero unauthorized requests leak through.
@@ -165,5 +193,10 @@ hey -z 30s -c 100 http://localhost:8080/v1/token-resource
 
 # Leaky Bucket Benchmark
 hey -z 30s -c 100 http://localhost:8080/v1/leaky-resource
+
+# Fixed Window Benchmark
+hey -n 20 -c 5 -H "X-API-Key: test-user-fixed" http://localhost:8080/v1/fixed-resource
+or
+hey -n 30 -c 5 http://localhost:8080/v1/fixed-resource
 
 ```
