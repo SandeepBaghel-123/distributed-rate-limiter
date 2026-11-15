@@ -113,3 +113,49 @@ else
 	return {1, remaining, 0}
 end
 `
+
+const SlidingWindowLogScript = `
+local key = KEYS[1]
+local window_size = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local requested = tonumber(ARGV[3])
+local member_id = ARGV[4]
+
+-- Fetch current time directly from Redis (fully compatible with Miniredis FastForward)
+local time_arr = redis.call('TIME')
+local now = tonumber(time_arr[1])
+
+local clear_before = now - window_size
+
+-- 1. Remove expired timestamps outside the rolling window
+redis.call('ZREMRANGEBYSCORE', key, '-inf', clear_before)
+
+-- 2. Count current active requests in the sliding window
+local current_count = tonumber(redis.call('ZCARD', key))
+
+if current_count + requested > limit then
+    -- Find the oldest request score to compute accurate retry-after time
+    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+    local retry_after_sec = window_size
+    if #oldest >= 2 then
+        local oldest_score = tonumber(oldest[2])
+        retry_after_sec = (oldest_score + window_size) - now
+        if retry_after_sec < 1 then
+            retry_after_sec = 1
+        end
+    end
+    local remaining = limit - current_count
+    if remaining < 0 then remaining = 0 end
+    return {0, remaining, math.ceil(retry_after_sec)}
+else
+    -- Add the new request timestamp to the sorted set
+    redis.call('ZADD', key, now, member_id)
+    -- Refresh expiration on the sorted set to prevent memory leaks
+    redis.call('EXPIRE', key, math.ceil(window_size * 2))
+
+    local new_count = current_count + requested
+    local remaining = limit - new_count
+    if remaining < 0 then remaining = 0 end
+    return {1, remaining, 0}
+end
+`

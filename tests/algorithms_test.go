@@ -3,6 +3,7 @@ package tests_test // or package main_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
@@ -116,5 +117,54 @@ func TestFixedWindowLimiter_Allow(t *testing.T) {
 	}
 	if res.RetryAfterMs <= 0 {
 		t.Errorf("expected positive RetryAfterMs when rate limited")
+	}
+}
+
+func TestSlidingWindowLogLimiter_Allow(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer mr.Close()
+
+	limiter := algorithms.NewSlidingWindowLogLimiter(client)
+	ctx := context.Background()
+	key := "test:swl:user1"
+
+	windowSize := 60.0 // 60 seconds rolling window
+	limit := 5.0       // Max 5 requests per window
+
+	// 1. Send requests up to the exact limit (5 requests)
+	for i := 0; i < 5; i++ {
+		res, err := limiter.Allow(ctx, key, windowSize, limit, 1)
+		if err != nil {
+			t.Fatalf("unexpected error on request %d: %v", i+1, err)
+		}
+		if !res.Allowed {
+			t.Errorf("expected request %d to be allowed", i+1)
+		}
+	}
+
+	// 2. The 6th request should be blocked (triggering 429 behaviour)
+	res, err := limiter.Allow(ctx, key, windowSize, limit, 1)
+	if err != nil {
+		t.Fatalf("unexpected error on exceeded request: %v", err)
+	}
+	if res.Allowed {
+		t.Errorf("expected 6th request to be blocked by sliding window limit")
+	}
+	if res.RetryAfterMs <= 0 {
+		t.Errorf("expected positive RetryAfterMs when rate limited")
+	}
+
+	// 3. Fast-Forward time and update miniredis internal clock for redis.call('TIME')
+	futureTime := time.Now().Add(61 * time.Second)
+	mr.FastForward(61 * time.Second)
+	mr.SetTime(futureTime)
+
+	// 4. Request should now succeed in the rolling window timeframe
+	res, err = limiter.Allow(ctx, key, windowSize, limit, 1)
+	if err != nil {
+		t.Fatalf("unexpected error after sliding window expiry: %v", err)
+	}
+	if !res.Allowed {
+		t.Errorf("expected request to be allowed after rolling window timestamp expired")
 	}
 }

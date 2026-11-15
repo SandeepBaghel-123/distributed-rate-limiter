@@ -23,6 +23,7 @@ func main() {
 	tokenBucketLimiter := algorithms.NewTokenBucketLimiter(redisClient.UniversalClient)
 	leakyBucketLimiter := algorithms.NewLeakyBucketLimiter(redisClient.UniversalClient)
 	fixedWindowLimiter := algorithms.NewFixedWindowLimiter(redisClient.UniversalClient)
+	slidingWindowLogLimiter := algorithms.NewSlidingWindowLogLimiter(redisClient.UniversalClient)
 
 	// 3. Setup Router
 	r := chi.NewRouter()
@@ -59,8 +60,18 @@ func main() {
 		})
 	})
 
-	// 7. Start Server
-	log.Println("Rate limiter server running on port 8080 with Token, Leaky Bucket, and Fixed Window algorithms...")
+	// 7. Route Group 3: Sliding Window Log Protected Endpoint (Traffic Shaping)
+	r.Group(func(r chi.Router) {
+		r.Use(custommw.SlidingWindowLogRatetLimitMiddleware(slidingWindowLogLimiter))
+		r.Get("/v1/sliding-log-resource", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status": "success", "message": "Sliding Window Log request allowed."}`))
+		})
+	})
+
+	// 8. Start Server
+	log.Println("Rate limiter server running on port 8080 with Token, Leaky Bucket, Fixed Window, and Sliding Window Log algorithms...")
 	if err := http.ListenAndServe(":8080", r); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
