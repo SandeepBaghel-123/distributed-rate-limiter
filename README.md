@@ -6,6 +6,7 @@ It supports multiple core algorithms:
 - **Token Bucket Algorithm** (Supports bursty client traffic)
 - **Leaky Bucket Algorithm** (Enforces smooth, constant egress rate processing)
 - **Fixed Window Counter Algorithm** (Enforces discrete time-window quotas with Redis atomic counters)
+- **Sliding Window Log Algorithm** (High-precision rolling window tracking using Redis Sorted Sets)
 
 ---
 
@@ -42,10 +43,12 @@ It supports multiple core algorithms:
 
 ## 🛠️ Tech Stack & Prerequisites
 
-* **Language:** Go 1.22+
-* **State Store:** Redis 7+
-* **Deployment:** Docker & Docker Compose
-* **Benchmarking Tools:** `hey`, `k6`
+*   **Language:** Go 1.22+ (Tested on Go 1.27.3)
+*   **Router:** `github.com/go-chi/chi/v5`
+*   **Redis Client:** `github.com/redis/go-redis/v9`
+*   **Testing:** `github.com/alicebob/miniredis/v2`
+*   **Deployment:** Docker & Docker Compose
+*   **Benchmarking Tools:** `hey`
 
 ---
 
@@ -67,6 +70,13 @@ docker compose up -d --build
 
 ```
 
+### 3. Start the Go Server
+
+```bash
+go run cmd/server/main.go
+
+```
+
 The service will start listening on `http://localhost:8080`.
 
 ---
@@ -78,6 +88,7 @@ The service will start listening on `http://localhost:8080`.
 | `GET /v1/token-resource` | **Token Bucket** | Accommodates traffic bursts up to max capacity; throttles when tokens deplete. |
 | `GET /v1/leaky-resource` | **Leaky Bucket** | Processes requests at a constant leak rate; drops excess requests instantly when full. |
 | `GET /v1/fixed-resource` | **Fixed Window Counter** |	Enforces a maximum request limit per discrete time window (e.g., 5 requests/60s). |
+| `GET /v1/sliding-log-resource` | **Sliding Window Log** | Tracks individual request timestamps in a Redis ZSET for exact rolling window precision. |
 
 ---
 
@@ -170,6 +181,28 @@ I tested the Fixed Window Counter algorithm under spike traffic to verify discre
   95% in 0.0397 secs  <-- p95: ~39.7 ms
 ```
 
+### 4. Sliding Window Log Algorithm (`/v1/sliding-log-resource`)
+
+*   **Test Duration:** 30.01 seconds
+*   **Concurrency Level (-c):** 100 concurrent workers
+*   **Total Requests Processed:** ~275,442
+*   **Throughput:** 9,178.27 Requests/Sec
+*   **Status Code Distribution:**
+    *   `200` OK (Allowed within rolling window): 500
+    *   `429 Too Many Requests` (Rolling window throttled): 274,942
+
+
+ #### Latency Percentiles (Fixed Window Counter)
+
+```text
+  10%% in 0.0088 secs
+  25%% in 0.0092 secs
+  50%% in 0.0100 secs
+  75%% in 0.0117 secs
+  90%% in 0.0139 secs
+  95%% in 0.0159 secs
+  99%% in 0.0217 secs
+```
 
 ## 📈 Key Takeaways & Performance Observations
 
@@ -178,6 +211,7 @@ I tested the Fixed Window Counter algorithm under spike traffic to verify discre
 3. **Algorithm Characteristics:**
 * **Token Bucket** permits sudden burst capacity up to the bucket limit before returning `429 Too Many Requests`.
 * **Leaky Bucket** strictly caps output throughput at a constant drain rate, making it ideal for protecting downstream dependencies with strict rate limits.
+* **Sliding Window Log** Uses Redis Sorted Sets (`ZSET`) where each request is logged as a timestamp member. Expired logs outside the rolling window are purged dynamically using ZREMRANGEBYSCORE, and active requests are counted using ZCARD.
 
 
 
@@ -198,5 +232,8 @@ hey -z 30s -c 100 http://localhost:8080/v1/leaky-resource
 hey -n 20 -c 5 -H "X-API-Key: test-user-fixed" http://localhost:8080/v1/fixed-resource
 or
 hey -n 30 -c 5 http://localhost:8080/v1/fixed-resource
+
+# Sliding Window Low Benchmark
+hey -z 30s -c 100 http://localhost:8080/v1/sliding-log-resource
 
 ```
