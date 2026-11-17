@@ -79,9 +79,17 @@ func FixedWindowRatetLimitMiddleware(limiter *algorithms.FixedWindowLimiter) fun
 	})
 }
 
-// SlidingWindowLogRatetLimitMiddleware wraps the Fixed Window limiter.
+// SlidingWindowLogRatetLimitMiddleware wraps the Sliding Window Log limiter.
 func SlidingWindowLogRatetLimitMiddleware(limiter *algorithms.SlidingWindowLogLimiter) func(http.Handler) http.Handler {
-	return baseRateLimitMiddleware("swl", "Rate limit exceeded. Sliding Window Low limit reached.", func(ctx context.Context, key string) (*algorithms.RateLimiterResult, error) {
+	return baseRateLimitMiddleware("swl", "Rate limit exceeded. Sliding Window Log limit reached.", func(ctx context.Context, key string) (*algorithms.RateLimiterResult, error) {
+		// Window size: 60 seconds, Limit: 5 requests, Requested: 1
+		return limiter.Allow(ctx, key, 60.0, 5.0, 1)
+	})
+}
+
+// SlidingWindowCounterRatetLimitMiddleware wraps the Sliding Window Counter limiter.
+func SlidingWindowCounterRatetLimitMiddleware(limiter *algorithms.SlidingWindowCounterLimiter) func(http.Handler) http.Handler {
+	return baseRateLimitMiddleware("swc", "Rate limit exceeded. Sliding Window Counter limit reached.", func(ctx context.Context, key string) (*algorithms.RateLimiterResult, error) {
 		// Window size: 60 seconds, Limit: 5 requests, Requested: 1
 		return limiter.Allow(ctx, key, 60.0, 5.0, 1)
 	})

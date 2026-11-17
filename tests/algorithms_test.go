@@ -168,3 +168,38 @@ func TestSlidingWindowLogLimiter_Allow(t *testing.T) {
 		t.Errorf("expected request to be allowed after rolling window timestamp expired")
 	}
 }
+
+func TestSlidingWindowCounterLimiter_Allow(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer mr.Close()
+
+	limiter := algorithms.NewSlidingWindowCounterLimiter(client)
+	ctx := context.Background()
+	key := "test:swc:user1"
+
+	windowSize := 60.0 // 60 seconds rolling window
+	limit := 5.0       // Max 5 requests per window
+
+	// 1. Send requests up to the exact limit (5 requests)
+	for i := 0; i < 5; i++ {
+		res, err := limiter.Allow(ctx, key, windowSize, limit, 1)
+		if err != nil {
+			t.Fatalf("unexpected error on request %d: %v", i+1, err)
+		}
+		if !res.Allowed {
+			t.Errorf("expected request %d to be allowed", i+1)
+		}
+	}
+
+	// 2. The 6th request should be blocked (triggering 429 behaviour)
+	res, err := limiter.Allow(ctx, key, windowSize, limit, 1)
+	if err != nil {
+		t.Fatalf("unexpected error on exceeded request: %v", err)
+	}
+	if res.Allowed {
+		t.Errorf("expected 6th request to be blocked by sliding window limit")
+	}
+	if res.RetryAfterMs <= 0 {
+		t.Errorf("expected positive RetryAfterMs when rate limited")
+	}
+}

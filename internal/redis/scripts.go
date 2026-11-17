@@ -159,3 +159,48 @@ else
     return {1, remaining, 0}
 end
 `
+
+const SlidingWindowCounterScript = `
+local key = KEYS[1]
+local window_size = tonumber(ARGV[1])	-- Window size in seconds (e.g., 60)
+local limit = tonumber(ARGV[2])			-- Max allowed requests per window
+local requested = tonumber(ARGV[3])		-- Number of requests requested
+local now = tonumber(ARGV[4])			-- Current timestamp in seconds
+
+-- Determine current window bucket and previous window bucket
+local current_window = math.floor(now / window_size)
+local previous_window = current_window - 1
+
+local current_window_key = key .. ":" .. current_window
+local previous_window_key = key .. ":" .. previous_window
+
+-- Get counts for current and previous window
+local current_count = tonumber(redis.call('GET', current_window_key) or "0")
+local previous_count = tonumber(redis.call('GET', previous_window_key) or "0")
+
+-- Calculate weight/overlap from the previous window
+local time_into_current_window = now % window_size
+local weight = (window_size - time_into_current_window) / window_size
+local rolling_count = math.floor(previous_count * weight + current_count)
+
+if rolling_count + requested > limit then
+	local window_end = (current_window + 1) * window_size
+	local retry_after_sec = window_end - now
+	if retry_after_sec < 1 then
+		retry_after_sec = 1
+	end
+	local remaining = limit - rolling_count
+	if remaining < 0 then remaining = 0 end
+	return {0, remaining, retry_after_sec}
+else
+	local new_count = redis.call('INCRBY', current_window_key, requested)
+	if current_count == 0 then
+	-- Expire key after twice the window_size to clean up old windows safely
+		redis.call('EXPIRE', current_window_key, window_size * 2)
+	end
+	local final_count = math.floor(previous_count * weight + current_count)
+	local remaining = limit - final_count
+	if remaining < 0 then remaining = 0 end
+	return {1, remaining, 0}
+end
+`
