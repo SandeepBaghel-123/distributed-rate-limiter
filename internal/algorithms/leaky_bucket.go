@@ -36,22 +36,12 @@ func (lb *LeakyBucketLimiter) Allow(ctx context.Context, key string, capacity fl
 		return nil, fmt.Errorf("unexpected lua script response format")
 	}
 
-	allowed := toInt64(resultSlice[0]) == 1
-	currentWater := toInt64(resultSlice[1]) // Sorted as current water level/count
-
 	result := &RateLimiterResult{
-		Allowed:      allowed,
-		CurrentCount: currentWater,
+		Allowed:   toInt64(resultSlice[0]) == 1,
+		Remaining: toInt64(resultSlice[1]),
 	}
 
-	if allowed {
-		// Remaining capacity approximation based on total capacity minue current water
-		remaining := int64(capacity) - currentWater
-		if remaining < 0 {
-			remaining = 0
-		}
-		result.Remaining = remaining
-	} else if len(resultSlice) >= 3 {
+	if !result.Allowed && len(resultSlice) >= 3 {
 		// If rejected, set retry after duration in milliseconds
 		result.RetryAfterMs = toInt64(resultSlice[2]) * 1000
 	}

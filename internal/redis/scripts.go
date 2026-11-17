@@ -32,8 +32,6 @@ else
 	local deficit = requested - tokens
 	local retry_after = math.ceil(deficit / refill_rate)
 
-	redis.call('HSET', key, 'tokens', tokens, 'last_updated', last_updated)
-
 	return {0, tokens, retry_after}
 end
 `
@@ -55,7 +53,8 @@ if bucket[1] and bucket[2] then
 end
 
 -- 2. Lazy Leak Math: Drain water based on time elapsed
-local delta = math.max(0, now - last_leak_time)
+now = math.max(now, last_leak_time)
+local delta = now - last_leak_time
 local leaked = delta * leak_rate
 water_level = math.max(0, water_level - leaked)
 
@@ -198,7 +197,7 @@ else
 	-- Expire key after twice the window_size to clean up old windows safely
 		redis.call('EXPIRE', current_window_key, window_size * 2)
 	end
-	local final_count = math.floor(previous_count * weight + current_count)
+	local final_count = math.floor(previous_count * weight + new_count)
 	local remaining = limit - final_count
 	if remaining < 0 then remaining = 0 end
 	return {1, remaining, 0}

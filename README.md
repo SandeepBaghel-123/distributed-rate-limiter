@@ -1,266 +1,109 @@
-# ⚡ Distributed Rate Limiter Engine
+# Distributed Rate Limiter
 
-A high-performance, distributed rate-limiter engine implemented in **Go** utilizing **Redis** and **atomic Lua scripts**. This engine provides thread-safe, low-latency traffic shaping and rate limiting across distributed microservices.
+A Go HTTP middleware demo that implements five rate-limiting algorithms with Redis. Multiple Go server instances share the same quota state. Each rate-limit decision runs in a Redis Lua script so the quota check and update happen atomically.
 
-It supports multiple core algorithms:
-- **Token Bucket Algorithm** (Supports bursty client traffic)
-- **Leaky Bucket Algorithm** (Enforces smooth, constant egress rate processing)
-- **Fixed Window Counter Algorithm** (Enforces discrete time-window quotas with Redis atomic counters)
-- **Sliding Window Log Algorithm** (High-precision rolling window tracking using Redis Sorted Sets)
-- **Sliding Window Counter Algorithm** (Hybrid approach blending memory efficiency with rolling window smoothness)
+The quota key uses the client's IP address and the algorithm. Reconnecting from the same IP or switching between server instances backed by the same Redis instance uses the same quota. Each demo endpoint has its own quota.
 
----
+## Endpoints
 
-## 📌 Architecture Overview
-```
-                    +----------------------+
-                    |   HTTP Request /     |
-                    |   Client Traffic     |
-                    +----------+-----------+
-                               |
-                               v
-                    +----------+-----------+
-                    |   Go Rate Limiter    |
-                    |       Engine         |
-                    +----------+-----------+
-                               |
-                    (Executes Lua Script)
-                               |
-                               v
-                    +----------+-----------+
-                    |      Redis Data      |
-                    |     Store (State)    |
-                    +----------------------+
-
-```
-
-### Key Engineering Highlights
-* **Atomic State Updates:** State checks and updates are executed within Redis using **Lua scripts** to guarantee strict atomicity without relying on heavy application-level distributed locks.
-* **Concurrency-Safe:** Designed to handle heavy concurrent request spikes with near-zero lock contention.
-* **Low Latency Overhead:** Sub-10ms median latency ($p_{50}$) for client request evaluation.
-* **Modular Design:** Simple abstraction interface allowing custom rate-limiting algorithms to be plugged into standard HTTP middleware seamlessly.
-
----
-
-## 🛠️ Tech Stack & Prerequisites
-
-*   **Language:** Go 1.22+ (Tested on Go 1.27.3)
-*   **Router:** `github.com/go-chi/chi/v5`
-*   **Redis Client:** `github.com/redis/go-redis/v9`
-*   **Testing:** `github.com/alicebob/miniredis/v2`
-*   **Deployment:** Docker & Docker Compose
-*   **Benchmarking Tools:** `hey`
-
----
-
-## 🚀 Quick Start & Local Setup
-
-### 1. Clone the Repository
-```bash
-git clone [https://github.com/SandeepBaghel-123/distributed-rate-limiter.git](https://github.com/SandeepBaghel-123/distributed-rate-limiter.git)
-cd distributed-rate-limiter
-
-```
-
-### 2. Run via Docker Compose
-
-Spin up both the Redis service and the Go HTTP server:
-
-```bash
-docker compose up -d --build
-
-```
-
-### 3. Start the Go Server
-
-```bash
-go run cmd/server/main.go
-
-```
-
-The service will start listening on `http://localhost:8080`.
-
----
-
-## 🔌 API Endpoints
-
-| Endpoint | Algorithm | Behavior |
+| GET endpoint | Algorithm | Policy |
 | --- | --- | --- |
-| `GET /v1/token-resource` | **Token Bucket** | Accommodates traffic bursts up to max capacity; throttles when tokens deplete. |
-| `GET /v1/leaky-resource` | **Leaky Bucket** | Processes requests at a constant leak rate; drops excess requests instantly when full. |
-| `GET /v1/fixed-resource` | **Fixed Window Counter** |	Enforces a maximum request limit per discrete time window (e.g., 5 requests/60s). |
-| `GET /v1/sliding-log-resource` | **Sliding Window Log** | Tracks individual request timestamps in a Redis ZSET for exact rolling window precision. |
-| `GET /v1/sliding-counter-resource` | **Sliding Window Counter** | Approximates rolling limits by blending current and previous window counts. |
+| `/v1/token-resource` | Token Bucket | Starts with up to 10 tokens and refills at 2 tokens per second. Each accepted request spends one token. |
+| `/v1/leaky-resource` | Leaky Bucket | Holds up to 10 units and drains at 2 units per second. Accepted requests run immediately. |
+| `/v1/fixed-resource` | Fixed Window | Allows 5 requests per aligned 60-second window. The counter resets at the window boundary. |
+| `/v1/sliding-log-resource` | Sliding Window Log | Allows 5 requests per rolling 60-second window. Redis stores individual timestamps with one-second resolution. |
+| `/v1/sliding-counter-resource` | Sliding Window Counter | Approximates a rolling limit of 5 requests per 60 seconds by weighting the previous window's count. |
 
----
+A rejected request returns `429 Too Many Requests` with a JSON body and a `Retry-After` value in seconds. If Redis returns an error during a request, the middleware **fails open** and lets the request proceed. The server requires Redis to be reachable at startup.
 
-## 📊 Performance & Load Testing Benchmarks
+## Quick start
 
-The engine was benchmarked under heavy saturation traffic to evaluate throughput, concurrency safety, and latency profiles under load.
-
-### Test Environment
-
-* **Tool:** `hey` CLI
-* **Concurrency Level (`-c`):** 100 concurrent connections
-* **Test Duration (`-z`):** 30 seconds
-* **Environment:** Go 1.22 + Redis 7 running via Docker containers
-
----
-
-### 1. Token Bucket Algorithm (`/v1/token-resource`)
-
-I tested the Token Bucket algorithm under burst conditions to verify capacity-based allowance and clean throttling upon token exhaustion.
-
-* **Total Requests Processed:** ~337,700
-* **Throughput:** **11,254.06 Requests/Sec**
-* **Status Code Distribution:**
-  - `200 OK` (Allowed Bursts): **34,137**
-  - `429 Too Many Requests` (Throttled): **303,563**
-
-
-
-#### Latency Percentiles
-
-```text
-  10% in 0.0065 secs
-  25% in 0.0075 secs
-  50% in 0.0086 secs  <-- Median (p50): ~8.6 ms
-  75% in 0.0099 secs
-  90% in 0.0117 secs
-  95% in 0.0132 secs
-  99% in 0.0167 secs  <-- p99: ~16.7 ms
-
-```
-
----
-
-### 2. Leaky Bucket Algorithm (`/v1/leaky-resource`)
-
-I tested the Leaky Bucket algorithm under identical load to verify constant-rate egress enforcement and bucket overflow prevention.
-
-* **Total Requests Processed:** ~343,400
-* **Throughput:** **11,445.16 Requests/Sec**
-* **Status Code Distribution:**
-  - `200 OK` (Allowed at Leak Rate): **6,900**
-  - `429 Too Many Requests` (Throttled/Overflow): **336,514**
-
-
-
-#### Latency Percentiles
-
-```text
-  10% in 0.0062 secs
-  25% in 0.0073 secs
-  50% in 0.0085 secs  <-- Median (p50): ~8.5 ms
-  75% in 0.0098 secs
-  90% in 0.0116 secs
-  95% in 0.0131 secs
-  99% in 0.0165 secs  <-- p99: ~16.5 ms
-
-```
-
----
-
-### 3. Fixed Window Counter Algorithm (`/v1/fixed-resource`)
-
-I tested the Fixed Window Counter algorithm under spike traffic to verify discrete time-window quota enforcement and immediate limit interception.
-
-* **Total Requests Processed:** 20
-* **Throughput:** **468.89 Requests/Sec**
-* **Status Code Distribution:**
-  - `200 OK` (Allowed within Window): **5**
-  - `429 Too Many Requests` (Exceeded Quota): **15**
- 
-
-#### Latency Percentiles
-
-```text
-  10% in 0.0008 secs
-  25% in 0.0010 secs
-  50% in 0.0019 secs  <-- Median (p50): ~1.9 ms
-  75% in 0.0278 secs
-  90% in 0.0389 secs
-  95% in 0.0397 secs  <-- p95: ~39.7 ms
-```
-
-### 4. Sliding Window Log Algorithm (`/v1/sliding-log-resource`)
-
-*  **Test Duration:** 30.01 seconds
-*  **Concurrency Level (-c):** 100 concurrent workers
-*  **Total Requests Processed:** ~275,442
-*  **Throughput:** 9,178.27 Requests/Sec
-*  **Status Code Distribution:**
-   - `200` OK (Allowed within rolling window): 500
-   - `429 Too Many Requests` (Rolling window throttled): 274,942
-
-
- #### Latency Percentiles
-
-```text
-  10%% in 0.0088 secs
-  25%% in 0.0092 secs
-  50%% in 0.0100 secs
-  75%% in 0.0117 secs
-  90%% in 0.0139 secs
-  95%% in 0.0159 secs
-  99%% in 0.0217 secs
-```
-
-### 5. Sliding Window Counter Algorithm (`/v1/sliding-counter-resouce`)
-
-*  **Test Duration:** 30.01 seconds
-*  **Concurrency Level (-c):** 100 concurrent workers
-*  **Total Requests Processed:** ~266,443
-*  **Throughput:** 8,877.58 Requests/Sec
-*  **Status Code Distribution:**
-   - `200` OK:  500
-   - `429 Too Many Requests`:  265,943
- 
-#### Latency Percentiles
-
-```text
-  10%% in 0.0089 secs
-  25%% in 0.0094 secs
-  50%% in 0.0102 secs
-  75%% in 0.0119 secs
-  90%% in 0.0144 secs
-  95%% in 0.0168 secs
-  99%% in 0.0239 secs
-```
-
-
-## 📈 Key Takeaways & Performance Observations
-
-1. **Deterministic Concurrency:** The atomic Redis Lua script prevents race conditions under high concurrent loads (100 parallel workers), ensuring zero unauthorized requests leak through.
-2. **Predictable Tail Latency:** Under heavy saturation (11,000+ RPS), 99% of all rate limit evaluations complete in **under 17 milliseconds** ($p_{99} < 17\text{ms}$).
-3. **Algorithm Characteristics:**
-* **Token Bucket** permits sudden burst capacity up to the bucket limit before returning `429 Too Many Requests`.
-* **Leaky Bucket** strictly caps output throughput at a constant drain rate, making it ideal for protecting downstream dependencies with strict rate limits.
-* **Sliding Window Log** Uses Redis Sorted Sets (`ZSET`) where each request is logged as a timestamp member. Expired logs outside the rolling window are purged dynamically using ZREMRANGEBYSCORE, and active requests are counted using ZCARD.
-* **Sliding Window Counter:** Blends request counts from the current and previous window buckets using a calculated time-overlap weight.
-
-
-
----
-
-## 🧪 Running Benchmarks Locally
-
-To reproduce these benchmarks on your local machine, run:
+Install Go 1.27.3 or newer and Docker with Compose. Install `hey` if you want to run the benchmarks.
 
 ```bash
-# Token Bucket Benchmark
-hey -z 30s -c 100 http://localhost:8080/v1/token-resource
-
-# Leaky Bucket Benchmark
-hey -z 30s -c 100 http://localhost:8080/v1/leaky-resource
-
-# Fixed Window Benchmark
-hey -n 30 -c 5 http://localhost:8080/v1/fixed-resource
-
-# Sliding Window Log Benchmark
-hey -z 30s -c 100 http://localhost:8080/v1/sliding-log-resource
-
-# Sliding Window Counter Benchmark
-hey -z 30s -c 100 http://localhost:8080/v1/sliding-counter-resource
-
+git clone https://github.com/SandeepBaghel-123/distributed-rate-limiter.git
+cd distributed-rate-limiter
+docker compose up -d redis
+docker compose exec redis redis-cli ping
+go run ./cmd/server
 ```
+
+Wait for Redis to respond with `PONG` before starting the server. The API listens on port 8080 by default.
+
+```bash
+curl -i http://127.0.0.1:8080/v1/fixed-resource
+```
+
+| Environment variable | Default |
+| --- | --- |
+| `HTTP_ADDR` | `:8080` |
+| `REDIS_ADDR` | `localhost:6379` |
+
+## Demo a shared quota across two servers
+
+Keep the first server running and start a second one in another terminal from the same checkout. Both use the same default Redis address.
+
+```powershell
+$env:HTTP_ADDR = ":8081"
+go run ./cmd/server
+```
+
+On Bash or Zsh, use `HTTP_ADDR=:8081 go run ./cmd/server` instead.
+
+From a third terminal, send three requests to port 8080 and three to port 8081. Start with an unused Fixed Window quota and run all six requests within the same clock minute. If you used the quick-start request above, wait for the next minute before running the demo.
+
+```bash
+for port in 8080 8081; do
+  for attempt in 1 2 3; do
+    curl -s -o /dev/null -w "$port %{http_code}\n" "http://127.0.0.1:$port/v1/fixed-resource"
+  done
+done
+```
+
+```powershell
+foreach ($port in 8080, 8081) {
+    foreach ($attempt in 1..3) {
+        curl.exe -s -o NUL -w "$port %{http_code}\n" "http://127.0.0.1:${port}/v1/fixed-resource"
+    }
+}
+```
+
+Expected output is three `200` responses from port 8080, followed by two `200` responses and one `429` from port 8081. The same client gets five successful requests across both servers.
+
+## Tests
+
+```bash
+go test ./...
+```
+
+The algorithm tests use miniredis and cover quota exhaustion for all five strategies. The Sliding Window Log test also checks that requests are admitted again after older entries expire.
+
+## Local HTTP throughput under sustained throttling
+
+Each endpoint was measured in a single local `hey` run with 100 concurrent workers for about 30 seconds. Results include both accepted and throttled responses. Almost every response was a `429`, so the end-to-end latency percentiles mainly describe how quickly the server rejected excess traffic.
+
+| Algorithm | Duration (s) | HTTP requests/s | 200 OK | 429 Too Many Requests | p50 (ms) | p95 (ms) | p99 (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Token Bucket | 30.0070 | 10,870 | 69 | 326,121 | 8.8 | 13.6 | 17.8 |
+| Leaky Bucket | 30.0050 | 11,805 | 69 | 354,153 | 8.2 | 12.5 | 16.0 |
+| Fixed Window | 30.0044 | 11,728 | 10 | 351,892 | 8.3 | 12.6 | 15.9 |
+| Sliding Window Log | 30.0048 | 11,594 | 5 | 347,884 | 8.3 | 12.7 | 15.8 |
+| Sliding Window Counter | 30.0036 | 12,183 | 5 | 365,540 | 8.1 | 11.6 | 14.5 |
+
+The Fixed Window count of 10 is consistent with crossing an aligned reset and consuming five requests on each side. The two bucket algorithms each admitted 69 requests, close to the approximately 70 expected from a fresh bucket under sustained load for 30 seconds.
+
+```bash
+hey -z 30s -c 100 http://localhost:8080/v1/token-resource
+hey -z 30s -c 100 http://127.0.0.1:8080/v1/leaky-resource
+hey -z 30s -c 100 http://127.0.0.1:8080/v1/fixed-resource
+hey -z 30s -c 100 http://127.0.0.1:8080/v1/sliding-log-resource
+hey -z 30s -c 100 http://127.0.0.1:8080/v1/sliding-counter-resource
+```
+
+Start each run with fresh quota state. Wait at least five seconds after traffic stops for either bucket to recover. Allow up to two minutes of idle time to clear prior usage for the window-based endpoints. Run one benchmark at a time.
+
+## Scope
+
+- The demo uses standalone Redis and identifies clients by their directly connected IP. Clients sharing an IP also share an endpoint's quota. Behind a reverse proxy, the proxy may appear as the client.
+- The window-based routes advertise their quota in `RateLimit-Policy`. The two bucket routes currently emit a window-style value that does not express their burst and sustained rates. Use the endpoint table for those policies.
+- The Compose file also defines Postgres. The rate limiter uses Redis only, so the quick start launches just the Redis service.
