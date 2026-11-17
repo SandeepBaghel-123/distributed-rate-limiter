@@ -7,6 +7,7 @@ It supports multiple core algorithms:
 - **Leaky Bucket Algorithm** (Enforces smooth, constant egress rate processing)
 - **Fixed Window Counter Algorithm** (Enforces discrete time-window quotas with Redis atomic counters)
 - **Sliding Window Log Algorithm** (High-precision rolling window tracking using Redis Sorted Sets)
+- **Sliding Window Counter Algorithm** (Hybrid approach blending memory efficiency with rolling window smoothness)
 
 ---
 
@@ -89,6 +90,7 @@ The service will start listening on `http://localhost:8080`.
 | `GET /v1/leaky-resource` | **Leaky Bucket** | Processes requests at a constant leak rate; drops excess requests instantly when full. |
 | `GET /v1/fixed-resource` | **Fixed Window Counter** |	Enforces a maximum request limit per discrete time window (e.g., 5 requests/60s). |
 | `GET /v1/sliding-log-resource` | **Sliding Window Log** | Tracks individual request timestamps in a Redis ZSET for exact rolling window precision. |
+| `GET /v1/sliding-counter-resource` | **Sliding Window Counter** | Approximates rolling limits by blending current and previous window counts. |
 
 ---
 
@@ -117,7 +119,7 @@ I tested the Token Bucket algorithm under burst conditions to verify capacity-ba
 
 
 
-#### Latency Percentiles (Token Bucket)
+#### Latency Percentiles
 
 ```text
   10% in 0.0065 secs
@@ -144,7 +146,7 @@ I tested the Leaky Bucket algorithm under identical load to verify constant-rate
 
 
 
-#### Latency Percentiles (Leaky Bucket)
+#### Latency Percentiles
 
 ```text
   10% in 0.0062 secs
@@ -170,7 +172,7 @@ I tested the Fixed Window Counter algorithm under spike traffic to verify discre
   - `429 Too Many Requests` (Exceeded Quota): **15**
  
 
-#### Latency Percentiles (Fixed Window Counter)
+#### Latency Percentiles
 
 ```text
   10% in 0.0008 secs
@@ -183,16 +185,16 @@ I tested the Fixed Window Counter algorithm under spike traffic to verify discre
 
 ### 4. Sliding Window Log Algorithm (`/v1/sliding-log-resource`)
 
-*   **Test Duration:** 30.01 seconds
-*   **Concurrency Level (-c):** 100 concurrent workers
-*   **Total Requests Processed:** ~275,442
-*   **Throughput:** 9,178.27 Requests/Sec
-*   **Status Code Distribution:**
-    *   `200` OK (Allowed within rolling window): 500
-    *   `429 Too Many Requests` (Rolling window throttled): 274,942
+*  **Test Duration:** 30.01 seconds
+*  **Concurrency Level (-c):** 100 concurrent workers
+*  **Total Requests Processed:** ~275,442
+*  **Throughput:** 9,178.27 Requests/Sec
+*  **Status Code Distribution:**
+   - `200` OK (Allowed within rolling window): 500
+   - `429 Too Many Requests` (Rolling window throttled): 274,942
 
 
- #### Latency Percentiles (Fixed Window Counter)
+ #### Latency Percentiles
 
 ```text
   10%% in 0.0088 secs
@@ -204,6 +206,29 @@ I tested the Fixed Window Counter algorithm under spike traffic to verify discre
   99%% in 0.0217 secs
 ```
 
+### 5. Sliding Window Counter Algorithm (`/v1/sliding-counter-resouce`)
+
+*  **Test Duration:** 30.01 seconds
+*  **Concurrency Level (-c):** 100 concurrent workers
+*  **Total Requests Processed:** ~266,443
+*  **Throughput:** 8,877.58 Requests/Sec
+*  **Status Code Distribution:**
+   - `200` OK:  500
+   - `429 Too Many Requests`:  265,943
+ 
+#### Latency Percentiles
+
+```text
+  10%% in 0.0089 secs
+  25%% in 0.0094 secs
+  50%% in 0.0102 secs
+  75%% in 0.0119 secs
+  90%% in 0.0144 secs
+  95%% in 0.0168 secs
+  99%% in 0.0239 secs
+```
+
+
 ## 📈 Key Takeaways & Performance Observations
 
 1. **Deterministic Concurrency:** The atomic Redis Lua script prevents race conditions under high concurrent loads (100 parallel workers), ensuring zero unauthorized requests leak through.
@@ -212,6 +237,7 @@ I tested the Fixed Window Counter algorithm under spike traffic to verify discre
 * **Token Bucket** permits sudden burst capacity up to the bucket limit before returning `429 Too Many Requests`.
 * **Leaky Bucket** strictly caps output throughput at a constant drain rate, making it ideal for protecting downstream dependencies with strict rate limits.
 * **Sliding Window Log** Uses Redis Sorted Sets (`ZSET`) where each request is logged as a timestamp member. Expired logs outside the rolling window are purged dynamically using ZREMRANGEBYSCORE, and active requests are counted using ZCARD.
+* **Sliding Window Counter:** Blends request counts from the current and previous window buckets using a calculated time-overlap weight.
 
 
 
@@ -229,11 +255,12 @@ hey -z 30s -c 100 http://localhost:8080/v1/token-resource
 hey -z 30s -c 100 http://localhost:8080/v1/leaky-resource
 
 # Fixed Window Benchmark
-hey -n 20 -c 5 -H "X-API-Key: test-user-fixed" http://localhost:8080/v1/fixed-resource
-or
 hey -n 30 -c 5 http://localhost:8080/v1/fixed-resource
 
-# Sliding Window Low Benchmark
+# Sliding Window Log Benchmark
 hey -z 30s -c 100 http://localhost:8080/v1/sliding-log-resource
+
+# Sliding Window Counter Benchmark
+hey -z 30s -c 100 http://localhost:8080/v1/sliding-counter-resource
 
 ```
