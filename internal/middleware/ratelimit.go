@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strconv"
 
@@ -17,14 +18,17 @@ func baseRateLimitMiddleware(algorithmName string, errorMsg string, evaluate rat
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 
-			// 1. Extract indentifier (API Key or fallback to Remote IP)
-			indentifier := r.Header.Get("X-API-Key")
-			if indentifier == "" {
-				indentifier = r.RemoteAddr
+			// 1. Extract identifier (API Key or fallback to Remote IP)
+			identifier := r.Header.Get("X-API-Key")
+			if identifier == "" {
+				identifier = r.RemoteAddr
+				if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+					identifier = host
+				}
 			}
 
 			// Construct dynamic redis key based on algorithm and identifier
-			limitKey := "rl:" + algorithmName + ":{" + indentifier + "}:resource"
+			limitKey := "rl:" + algorithmName + ":{" + identifier + "}:resource"
 
 			// 2. Evaluate rate limit using the passed strategy
 			result, err := evaluate(ctx, limitKey)
